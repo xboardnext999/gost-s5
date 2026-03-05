@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 版本信息
-VERSION="v1.0.7"
+VERSION="v1.0.1"
 
 # 颜色定义
 red='\033[0;31m'
