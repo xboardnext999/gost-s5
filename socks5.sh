@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 版本信息
-VERSION="v1.0.3"
+VERSION="v1.0.4"
 
 # 颜色定义
 red='\033[0;31m'
@@ -13,10 +13,12 @@ plain='\033[0m'
 [[ $EUID -ne 0 ]] && echo -e "${red}错误:${plain} 必须使用 root 用户运行！" && exit 1
 
 # ==============================
-# 环境安装与自注册
+# 自动安装与强力清缓存更新
 # ==============================
 install_self() {
-    curl -Ls https://raw.githubusercontent.com/xboardnext999/socks5/main/socks5.sh -o /usr/local/bin/socks5_script
+    # 通过在 URL 后添加时间戳 ?v=xxx 强制跳过 GitHub 缓存
+    echo -e "${yellow}► 正在从 GitHub 同步最新脚本 (v${VERSION})...${plain}"
+    curl -Ls "https://raw.githubusercontent.com/xboardnext999/socks5/main/socks5.sh?v=$(date +%s)" -o /usr/local/bin/socks5_script
     chmod +x /usr/local/bin/socks5_script
     ln -sf /usr/local/bin/socks5_script /usr/local/bin/socks5
     ln -sf /usr/local/bin/socks5_script /usr/local/bin/sock5
@@ -136,7 +138,7 @@ batch_control() {
     done
 }
 
-# 解决彩色字符对齐问题的状态显示函数
+# 彻底修复对齐显示
 show_status() {
     echo -e "-----------------------------------------------"
     echo -e "端口       状态           内存占用"
@@ -152,8 +154,8 @@ show_status() {
         mem=$(systemctl show -p MemoryCurrent gost_$port | cut -d= -f2)
         [[ "$mem" == "[not set]" || "$mem" == "0" ]] && mem_mb="0.00" || mem_mb=$(echo "scale=2; $mem/1024/1024" | bc)
         
-        # 使用 echo -e 配合固定宽度的制表符或空格手动对齐
-        echo -e "${port}      ${status_show}         ${mem_mb}MB"
+        # 强制手动对齐
+        echo -e "${port}\t   ${status_show}\t  ${mem_mb}MB"
     done
     echo -e "-----------------------------------------------"
 }
