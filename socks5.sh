@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 版本信息
-VERSION="v1.0.4"
+VERSION="v1.0.5"
 
 # 颜色定义
 red='\033[0;31m'
@@ -13,10 +13,22 @@ plain='\033[0m'
 [[ $EUID -ne 0 ]] && echo -e "${red}错误:${plain} 必须使用 root 用户运行！" && exit 1
 
 # ==============================
-# 自动安装与强力清缓存更新
+# 自动检测并安装必备组件
+# ==============================
+check_deps() {
+    for pkg in net-tools wget curl bc; do
+        if ! command -v $pkg &> /dev/null; then
+            echo -e "${yellow}► 正在安装缺失组件: $pkg ...${plain}"
+            apt-get update -y && apt-get install -y $pkg || yum install -y $pkg
+        fi
+    done
+}
+
+# ==============================
+# 自动安装与更新
 # ==============================
 install_self() {
-    # 通过在 URL 后添加时间戳 ?v=xxx 强制跳过 GitHub 缓存
+    check_deps
     echo -e "${yellow}► 正在从 GitHub 同步最新脚本 (v${VERSION})...${plain}"
     curl -Ls "https://raw.githubusercontent.com/xboardnext999/socks5/main/socks5.sh?v=$(date +%s)" -o /usr/local/bin/socks5_script
     chmod +x /usr/local/bin/socks5_script
@@ -39,7 +51,12 @@ gen_rand() { head /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-8} | head -n 
 gen_port() {
     while :; do
         port=$((RANDOM % 50001 + 10000))
-        (netstat -tuln | grep -q ":$port ") || { echo "$port"; break; }
+        # 确保 netstat 存在时再检查
+        if command -v netstat &> /dev/null; then
+            (netstat -tuln | grep -q ":$port ") || { echo "$port"; break; }
+        else
+            echo "$port"; break;
+        fi
     done
 }
 
@@ -52,6 +69,7 @@ get_ips() {
 # 核心功能
 # ==============================
 add_proxy() {
+    check_deps
     install_gost
     echo -e "--- 添加新代理端口 ---"
     read -p "请输入用户名 [随机]: " S_USER
@@ -138,11 +156,10 @@ batch_control() {
     done
 }
 
-# 彻底修复对齐显示
 show_status() {
-    echo -e "-----------------------------------------------"
-    echo -e "端口       状态           内存占用"
-    echo -e "-----------------------------------------------"
+    echo -e "------------------------------------------------"
+    echo -e "端口\t\t状态\t\t内存占用"
+    echo -e "------------------------------------------------"
     for s in $(ls /etc/systemd/system/gost_*.service 2>/dev/null); do
         port=$(echo $s | grep -oE '[0-9]+')
         status_raw=$(systemctl is-active gost_$port)
@@ -153,11 +170,9 @@ show_status() {
         fi
         mem=$(systemctl show -p MemoryCurrent gost_$port | cut -d= -f2)
         [[ "$mem" == "[not set]" || "$mem" == "0" ]] && mem_mb="0.00" || mem_mb=$(echo "scale=2; $mem/1024/1024" | bc)
-        
-        # 强制手动对齐
-        echo -e "${port}\t   ${status_show}\t  ${mem_mb}MB"
+        echo -e "${port}\t\t${status_show}\t\t${mem_mb}MB"
     done
-    echo -e "-----------------------------------------------"
+    echo -e "------------------------------------------------"
 }
 
 uninstall_all() {
@@ -171,7 +186,7 @@ uninstall_all() {
     pkill -9 gost >/dev/null 2>&1
     rm -rf /etc/systemd/system/gost_*.service /etc/gost /usr/bin/gost /usr/local/bin/socks5 /usr/local/bin/sock5 /usr/local/bin/socks5_script
     systemctl daemon-reload
-    echo -e "${green}✔ 卸载完成！脚本已清理。${plain}"
+    echo -e "${green}✔ 卸载完成！脚本已完全清理。${plain}"
     exit 0
 }
 
