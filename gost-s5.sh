@@ -98,9 +98,19 @@ add_proxy() {
     [[ -z "$S_PASS" ]] && S_PASS=$(gen_rand 12)
     read -p "请输入端口 [回车随机]: " S_PORT
     [[ -z "$S_PORT" ]] && S_PORT=$(gen_port)
+    read -p "请输入内存限制 (MB) [回车不限制]: " S_MEM
 
     mkdir -p /etc/gost-s5
     echo "${S_USER}:${S_PASS}" > /etc/gost-s5/conf_${S_PORT}.txt
+    
+    # 构造内存限制行
+    MEM_CONFIG=""
+    if [[ ! -z "$S_MEM" ]]; then
+        MEM_CONFIG="MemoryLimit=${S_MEM}M"
+        echo "$S_MEM" > /etc/gost-s5/conf_${S_PORT}.mem
+    else
+        rm -f /etc/gost-s5/conf_${S_PORT}.mem
+    fi
     
     cat <<EOF > /etc/systemd/system/gost_${S_PORT}.service
 [Unit]
@@ -113,6 +123,7 @@ ExecStart=/usr/bin/gost -L ${S_USER}:${S_PASS}@:${S_PORT}
 Restart=always
 RestartSec=5
 LimitNOFILE=65535
+${MEM_CONFIG}
 
 [Install]
 WantedBy=multi-user.target
@@ -122,8 +133,33 @@ EOF
     systemctl enable gost_${S_PORT} >/dev/null 2>&1
     systemctl restart gost_${S_PORT}
     monitor_port "$S_PORT"
-    echo -e "${green}✔ 配置成功！(当前未限制内存)${plain}"
+    
+    if [[ -z "$S_MEM" ]]; then
+        echo -e "${green}✔ 配置成功！(当前未限制内存)${plain}"
+    else
+        echo -e "${green}✔ 配置成功！(内存限制: ${S_MEM}MB)${plain}"
+    fi
+    
     show_single_info "$S_PORT" "$S_USER" "$S_PASS"
+}
+
+show_single_info() {
+    local port=$1; local user=$2; local pass=$3; get_ips
+    local mem_info="不限制"
+    [[ -f "/etc/gost-s5/conf_${port}.mem" ]] && mem_info="$(cat /etc/gost-s5/conf_${port}.mem)MB"
+
+    echo -e "${green}代理安装成功！已设置开机自启${plain}"
+    echo -e "${yellow}您的Sock5详细信息，请务必保存好！${plain}"
+    echo -e "IPV4: ${green}${IP4:-未探测到}${plain}"
+    echo -e "IPV6: ${green}${IP6:-未探测到}${plain}"
+    echo -e "用户: ${green}${user}${plain}"
+    echo -e "密码: ${green}${pass}${plain}"
+    echo -e "端口: ${green}${port}${plain}"
+    echo -e "内存限制: ${green}${mem_info}${plain}"
+    echo -e "---"
+    echo -e "${yellow}SOCKS5 详情：${plain}"
+    [[ ! -z "$IP4" ]] && echo -e "IPv4 链接: ${cyan}socks5://${user}:${pass}@${IP4}:${port}${plain}"
+    [[ ! -z "$IP6" ]] && echo -e "IPv6 链接: ${cyan}socks5://${user}:${pass}@[${IP6}]:${port}${plain}"
 }
 
 show_status() {
@@ -159,12 +195,11 @@ manage_single() {
         1) systemctl start gost_$port ;;
         2) systemctl stop gost_$port ;;
         3) systemctl restart gost_$port ;;
-        4) systemctl stop gost_$port; systemctl disable gost_$port; rm -f /etc/systemd/system/gost_$port.service /etc/gost-s5/conf_$port.txt /etc/gost-s5/traffic/${port}.db; echo "已删除" ;;
+        4) systemctl stop gost_$port; systemctl disable gost_$port; rm -f /etc/systemd/system/gost_$port.service /etc/gost-s5/conf_$port.txt /etc/gost-s5/conf_$port.mem /etc/gost-s5/traffic/${port}.db; echo "已删除" ;;
         5) rm -f /etc/gost-s5/traffic/${port}.db; echo "该端口流量记录已清零" ;;
     esac
 }
 
-# (其余展示与菜单函数保持不变)
 show_all_info() {
     services=$(ls /etc/systemd/system/gost_*.service 2>/dev/null)
     [[ -z "$services" ]] && echo "暂无代理信息" && return
@@ -187,21 +222,6 @@ batch_control() {
         [[ $op == 3 ]] && systemctl restart $name
     done
     echo "批量操作完成"
-}
-
-show_single_info() {
-    local port=$1; local user=$2; local pass=$3; get_ips
-    echo -e "${green}代理安装成功！已设置开机自启${plain}"
-    echo -e "${yellow}您的Sock5详细信息，请务必保存好！${plain}"
-    echo -e "IPV4: ${green}${IP4:-未探测到}${plain}"
-    echo -e "IPV6: ${green}${IP6:-未探测到}${plain}"
-    echo -e "用户: ${green}${user}${plain}"
-    echo -e "密码: ${green}${pass}${plain}"
-    echo -e "端口: ${green}${port}${plain}"
-    echo -e "---"
-    echo -e "${yellow}SOCKS5 详情：${plain}"
-    [[ ! -z "$IP4" ]] && echo -e "IPv4 链接: ${cyan}socks5://${user}:${pass}@${IP4}:${port}${plain}"
-    [[ ! -z "$IP6" ]] && echo -e "IPv6 链接: ${cyan}socks5://${user}:${pass}@[${IP6}]:${port}${plain}"
 }
 
 uninstall_all() {
