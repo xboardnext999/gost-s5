@@ -39,19 +39,22 @@ get_ips() {
 # ==============================
 # 功能函数
 # ==============================
-# 1. 安装/添加代理
+# 1. 安装/添加代理 (调整了输入顺序)
 add_proxy() {
     install_gost
     echo -e "--- 添加新代理端口 ---"
-    read -p "请输入端口 [建议10000以上]: " S_PORT
-    [[ -z "$S_PORT" ]] && echo -e "${red}错误: 端口不能为空${plain}" && return
     
+    # 调整顺序：先用户名、密码，后端口
     read -p "请输入用户名 [随机]: " S_USER
     [[ -z "$S_USER" ]] && S_USER=$(gen_rand 6)
+    
     read -p "请输入密码 [随机]: " S_PASS
     [[ -z "$S_PASS" ]] && S_PASS=$(gen_rand 12)
+    
+    read -p "请输入端口 [建议10000以上]: " S_PORT
+    [[ -z "$S_PORT" ]] && echo -e "${red}错误: 端口不能为空${plain}" && return
 
-    # 存储配置信息供以后查看
+    # 存储配置信息
     mkdir -p /etc/gost
     echo "${S_USER}:${S_PASS}" > /etc/gost/conf_${S_PORT}.txt
 
@@ -75,27 +78,35 @@ EOF
     systemctl enable gost_${S_PORT} >/dev/null 2>&1
     systemctl restart gost_${S_PORT}
     
-    echo -e "${green}✔ 端口 ${S_PORT} 配置成功！${plain}"
+    echo -e "${green}✔ 配置成功！${plain}"
     show_single_info "$S_PORT" "$S_USER" "$S_PASS"
 }
 
-# 显示单条信息格式
+# 格式化显示
 show_single_info() {
     local port=$1
     local user=$2
     local pass=$3
     get_ips
-    echo -e "您的Sock5详细信息，请务必保存好！"
+    echo -e "${green}代理安装成功！已设置开机自启${plain}"
+    echo -e "${yellow}您的Sock5详细信息，请务必保存好！${plain}"
     echo -e "IPV4: ${green}${IP4}${plain}"
     echo -e "IPV6: ${green}${IP6}${plain}"
     echo -e "用户: ${green}${user}${plain}"
     echo -e "密码: ${green}${pass}${plain}"
     echo -e "端口: ${green}${port}${plain}"
-    echo -e "IPv4 链接: ${cyan}socks5://${user}:${pass}@${IP4}:${port}${plain}"
-    echo -e "IPv6 链接: ${cyan}socks5://${user}:${pass}@[${IP6}]:${port}${plain}"
+    echo -e "---"
+    echo -e "${yellow}SOCKS5 详情：${plain}"
+    
+    if [[ ! -z "$IP4" ]]; then
+        echo -e "IPv4 链接: ${cyan}socks5://${user}:${pass}@${IP4}:${port}${plain}"
+    fi
+
+    if [[ ! -z "$IP6" ]]; then
+        echo -e "IPv6 链接: ${cyan}socks5://${user}:${pass}@[${IP6}]:${port}${plain}"
+    fi
 }
 
-# 5. 查看所有代理信息
 show_all_info() {
     services=$(ls /etc/systemd/system/gost_*.service 2>/dev/null)
     [[ -z "$services" ]] && echo "暂无代理信息" && return
@@ -109,7 +120,6 @@ show_all_info() {
     done
 }
 
-# 2. 管理单个端口
 manage_single() {
     echo -e "${yellow}当前端口列表：${plain}"
     ls /etc/systemd/system/gost_*.service 2>/dev/null | grep -oE '[0-9]+'
@@ -124,7 +134,6 @@ manage_single() {
     esac
 }
 
-# 3. 批量操作
 batch_control() {
     echo "1. 全部开启 | 2. 全部停止 | 3. 全部重启"
     read -p "选择操作 [1-3]: " op
@@ -137,21 +146,18 @@ batch_control() {
     echo "批量操作完成"
 }
 
-# 4. 运行状态
 show_status() {
     printf "%-10s %-15s %-10s\n" "端口" "状态" "内存占用"
     for s in $(ls /etc/systemd/system/gost_*.service 2>/dev/null); do
         port=$(echo $s | grep -oE '[0-9]+')
         status=$(systemctl is-active gost_$port)
         mem=$(systemctl show -p MemoryCurrent gost_$port | cut -d= -f2)
-        [[ "$mem" == "[not set]" ]] && mem="0"
-        mem_mb=$(echo "scale=2; $mem/1024/1024" | bc)
+        [[ "$mem" == "[not set]" || "$mem" == "0" ]] && mem_mb="0.00" || mem_mb=$(echo "scale=2; $mem/1024/1024" | bc)
         [[ "$status" == "active" ]] && status_col="${green}运行中${plain}" || status_col="${red}已停止${plain}"
         printf "%-10s %-25s %-10s\n" "$port" "$status_col" "${mem_mb}MB"
     done
 }
 
-# 6. 卸载服务
 uninstall_all() {
     pkill -9 gost
     rm -rf /etc/systemd/system/gost_*.service /etc/gost /usr/bin/gost /usr/local/bin/socks5 /usr/local/bin/sock5 /usr/local/bin/socks5_script
@@ -164,7 +170,7 @@ uninstall_all() {
 # ==============================
 menu() {
     clear
-    echo -e "${green} SOCKS5 超轻量管理工具${plain}"
+    echo -e "${green} SOCKS5 超轻量管理工具${plain}"
     echo "-----------------------------"
     echo "1.安装/重置 SOCKS5 代理"
     echo "2.查看/管理单个端口 (启动/停止/删除)"
