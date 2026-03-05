@@ -12,78 +12,15 @@ plain='\033[0m'
 
 [[ $EUID -ne 0 ]] && echo -e "${red}错误:${plain} 必须使用 root 用户运行！" && exit 1
 
-# ==============================
-# 流量持久化逻辑
-# ==============================
-# 1. 确保流量监控目录存在
-mkdir -p /etc/gost-s5/traffic
-
-# 2. 格式化流量显示
-format_traffic() {
-    local bytes=$1
-    if [[ $bytes -lt 1024 ]]; then
-        echo "${bytes} B"
-    elif [[ $bytes -lt 1048576 ]]; then
-        echo "$(echo "scale=2; $bytes/1024" | bc) KB"
-    elif [[ $bytes -lt 1073741824 ]]; then
-        echo "$(echo "scale=2; $bytes/1048576" | bc) MB"
-    else
-        echo "$(echo "scale=2; $bytes/1073741824" | bc) GB"
-    fi
-}
-
-# 3. 注册 iptables 规则
-monitor_port() {
-    local port=$1
-    iptables -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport $port -j ACCEPT
-    iptables -C OUTPUT -p tcp --sport $port -j ACCEPT 2>/dev/null || iptables -A OUTPUT -p tcp --sport $port -j ACCEPT
-}
-
-# 4. 获取并持久化流量
-get_total_traffic() {
-    local port=$1
-    local db_file="/etc/gost-s5/traffic/${port}.db"
-    
-    # 获取当前内核计数器数值
-    local curr_in=$(iptables -nvx -L INPUT | grep "tcp dpt:$port" | awk '{print $2}' | head -n 1)
-    local curr_out=$(iptables -nvx -L OUTPUT | grep "tcp spt:$port" | awk '{print $2}' | head -n 1)
-    local curr_total=$(( ${curr_in:-0} + ${curr_out:-0} ))
-
-    # 读取历史记录
-    if [[ -f "$db_file" ]]; then
-        read last_total last_kernel < "$db_file"
-    else
-        last_total=0
-        last_kernel=0
-    fi
-
-    # 判断内核是否重启过（当前计数小于上次记录的内核值）
-    if [[ $curr_total -lt $last_kernel ]]; then
-        # 计数器重置了，将当前值直接累加到总计
-        new_total=$(( last_total + curr_total ))
-    else
-        # 正常增长，增加增量部分
-        new_total=$(( last_total + (curr_total - last_kernel) ))
-    fi
-
-    # 保存当前状态：[历史总计] [当前内核值]
-    echo "$new_total $curr_total" > "$db_file"
-    echo "$new_total"
-}
-
-# ==============================
-# 环境安装与同步
-# ==============================
+# 环境安装与同步 (gost-s5 专用)
 install_self() {
+    # 强制跳过 GitHub 缓存获取最新版
     echo -e "${yellow}► 正在同步最新脚本 (v${VERSION})...${plain}"
     curl -Ls "https://raw.githubusercontent.com/xboardnext999/gost-s5/main/gost-s5.sh?v=$(date +%s)" -o /usr/local/bin/gost_s5_script
     chmod +x /usr/local/bin/gost_s5_script
     ln -sf /usr/local/bin/gost_s5_script /usr/local/bin/socks5
     ln -sf /usr/local/bin/gost_s5_script /usr/local/bin/sock5
     ln -sf /usr/local/bin/gost_s5_script /usr/local/bin/gost-s5
-    
-    # 自动安装流量统计依赖
-    apt-get install -y bc iptables &>/dev/null || yum install -y bc iptables &>/dev/null
 }
 
 install_gost() {
@@ -97,8 +34,19 @@ install_gost() {
 }
 
 gen_rand() { head /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-8} | head -n 1; }
-gen_port() { while :; do port=$((RANDOM % 50001 + 10000)); (ss -tuln | grep -q ":$port ") || { echo "$port"; break; }; done; }
-get_ips() { IP4=$(curl -s4m 5 ip.sb || curl -s4m 5 ifconfig.me); IP6=$(curl -s6m 5 ip.sb || curl -s6m 5 ifconfig.me); }
+
+# 使用系统原生 ss 命令探测端口
+gen_port() {
+    while :; do
+        port=$((RANDOM % 50001 + 10000))
+        (ss -tuln | grep -q ":$port ") || { echo "$port"; break; }
+    done
+}
+
+get_ips() {
+    IP4=$(curl -s4m 5 ip.sb || curl -s4m 5 ifconfig.me)
+    IP6=$(curl -s6m 5 ip.sb || curl -s6m 5 ifconfig.me)
+}
 
 # 核心功能
 add_proxy() {
@@ -111,6 +59,7 @@ add_proxy() {
     read -p "请输入端口 [回车随机]: " S_PORT
     [[ -z "$S_PORT" ]] && S_PORT=$(gen_port)
 
+    # 存储配置信息到/etc/gost-s5
     mkdir -p /etc/gost-s5
     echo "${S_USER}:${S_PASS}" > /etc/gost-s5/conf_${S_PORT}.txt
 
@@ -133,98 +82,8 @@ EOF
     systemctl daemon-reload
     systemctl enable gost_${S_PORT} >/dev/null 2>&1
     systemctl restart gost_${S_PORT}
-    
-    # 注册流量监控
-    monitor_port "$S_PORT"
-    
     echo -e "${green}✔ 配置成功！${plain}"
     show_single_info "$S_PORT" "$S_USER" "$S_PASS"
-}
-
-show_status() {
-    echo -e "----------------------------------------------------------------"
-    echo -e "端口\t状态\t\t内存占用\t累计流量(重启不丢)"
-    echo -e "----------------------------------------------------------------"
-    local total_all_ports=0
-    for s in $(ls /etc/systemd/system/gost_*.service 2>/dev/null); do
-        port=$(echo $s | grep -oE '[0-9]+')
-        monitor_port "$port"
-        
-        status_raw=$(systemctl is-active gost_$port)
-        [[ "$status_raw" == "active" ]] && s_show="${green}运行中${plain}" || s_show="${red}已停止${plain}"
-        
-        mem=$(systemctl show -p MemoryCurrent gost_$port | cut -d= -f2)
-        [[ "$mem" == "[not set]" || "$mem" == "0" ]] && m_show="0.00MB" || m_show="$(echo "scale=2; $mem/1024/1024" | bc)MB"
-        
-        # 获取持久化流量
-        bytes=$(get_total_traffic "$port")
-        total_all_ports=$((total_all_ports + bytes))
-        t_show=$(format_traffic "$bytes")
-        
-        echo -e "${port}\t${s_show}\t\t${m_show}\t\t${t_show}"
-    done
-    echo -e "----------------------------------------------------------------"
-    echo -e "${yellow}所有端口累计总流量: $(format_traffic "$total_all_ports")${plain}"
-    echo -e "----------------------------------------------------------------"
-}
-
-manage_single() {
-    echo -e "${yellow}当前端口列表：${plain}"
-    ls /etc/systemd/system/gost_*.service 2>/dev/null | grep -oE '[0-9]+'
-    read -p "请输入要操作的端口: " port
-    [[ ! -f "/etc/systemd/system/gost_${port}.service" ]] && echo "端口不存在" && return
-    echo "1. 启动 | 2. 停止 | 3. 重启 | 4. 删除 | 5. 流量清零"
-    read -p "选择操作 [1-5]: " op
-    case $op in
-        1) systemctl start gost_$port ;;
-        2) systemctl stop gost_$port ;;
-        3) systemctl restart gost_$port ;;
-        4) 
-           systemctl stop gost_$port; systemctl disable gost_$port
-           rm -f /etc/systemd/system/gost_$port.service /etc/gost-s5/conf_$port.txt /etc/gost-s5/traffic/${port}.db
-           echo "已删除" ;;
-        5) rm -f /etc/gost-s5/traffic/${port}.db; echo "该端口流量记录已清零" ;;
-    esac
-}
-
-uninstall_all() {
-    echo -e "${yellow}► 正在彻底卸载 gost-s5 并清理残留...${plain}"
-    services=$(ls /etc/systemd/system/gost_*.service 2>/dev/null)
-    for s in $services; do
-        name=$(basename $s)
-        systemctl stop "$name" >/dev/null 2>&1
-        systemctl disable "$name" >/dev/null 2>&1
-    done
-    pkill -9 gost >/dev/null 2>&1
-    rm -rf /etc/systemd/system/gost_*.service /etc/gost-s5 /usr/bin/gost /usr/local/bin/socks5 /usr/local/bin/sock5 /usr/local/bin/gost-s5 /usr/local/bin/gost_s5_script
-    systemctl daemon-reload
-    echo -e "${green}✔ 卸载完成！系统已恢复干净。${plain}"
-    exit 0
-}
-
-# (其余函数 show_all_info, batch_control, menu 保持不变)
-show_all_info() {
-    services=$(ls /etc/systemd/system/gost_*.service 2>/dev/null)
-    [[ -z "$services" ]] && echo "暂无代理信息" && return
-    for s in $services; do
-        port=$(echo $s | grep -oE '[0-9]+')
-        auth=$(cat /etc/gost-s5/conf_${port}.txt 2>/dev/null)
-        user=$(echo $auth | cut -d: -f1); pass=$(echo $auth | cut -d: -f2)
-        echo "-----------------------------"
-        show_single_info "$port" "$user" "$pass"
-    done
-}
-
-batch_control() {
-    echo "1. 全部开启 | 2. 全部停止 | 3. 全部重启"
-    read -p "选择操作 [1-3]: " op
-    for s in $(ls /etc/systemd/system/gost_*.service 2>/dev/null); do
-        name=$(basename $s)
-        [[ $op == 1 ]] && systemctl start $name
-        [[ $op == 2 ]] && systemctl stop $name
-        [[ $op == 3 ]] && systemctl restart $name
-    done
-    echo "批量操作完成"
 }
 
 show_single_info() {
@@ -242,14 +101,91 @@ show_single_info() {
     [[ ! -z "$IP6" ]] && echo -e "IPv6 链接: ${cyan}socks5://${user}:${pass}@[${IP6}]:${port}${plain}"
 }
 
+show_all_info() {
+    services=$(ls /etc/systemd/system/gost_*.service 2>/dev/null)
+    [[ -z "$services" ]] && echo "暂无代理信息" && return
+    for s in $services; do
+        port=$(echo $s | grep -oE '[0-9]+')
+        auth=$(cat /etc/gost-s5/conf_${port}.txt 2>/dev/null)
+        user=$(echo $auth | cut -d: -f1); pass=$(echo $auth | cut -d: -f2)
+        echo "-----------------------------"
+        show_single_info "$port" "$user" "$pass"
+    done
+}
+
+manage_single() {
+    echo -e "${yellow}当前端口列表：${plain}"
+    ls /etc/systemd/system/gost_*.service 2>/dev/null | grep -oE '[0-9]+'
+    read -p "请输入要操作的端口: " port
+    [[ ! -f "/etc/systemd/system/gost_${port}.service" ]] && echo "端口不存在" && return
+    echo "1. 启动 | 2. 停止 | 3. 重启 | 4. 删除"
+    read -p "选择操作 [1-4]: " op
+    case $op in
+        1) systemctl start gost_$port && echo "已启动" ;;
+        2) systemctl stop gost_$port && echo "已停止" ;;
+        3) systemctl restart gost_$port && echo "已重启" ;;
+        4) systemctl stop gost_$port; systemctl disable gost_$port; rm -f /etc/systemd/system/gost_$port.service /etc/gost-s5/conf_$port.txt; echo "已删除" ;;
+    esac
+}
+
+batch_control() {
+    echo "1. 全部开启 | 2. 全部停止 | 3. 全部重启"
+    read -p "选择操作 [1-3]: " op
+    for s in $(ls /etc/systemd/system/gost_*.service 2>/dev/null); do
+        name=$(basename $s)
+        [[ $op == 1 ]] && systemctl start $name
+        [[ $op == 2 ]] && systemctl stop $name
+        [[ $op == 3 ]] && systemctl restart $name
+    done
+    echo "批量操作完成"
+}
+
+show_status() {
+    echo -e "------------------------------------------------"
+    echo -e "端口\t\t状态\t\t内存占用"
+    echo -e "------------------------------------------------"
+    for s in $(ls /etc/systemd/system/gost_*.service 2>/dev/null); do
+        port=$(echo $s | grep -oE '[0-9]+')
+        status_raw=$(systemctl is-active gost_$port)
+        if [[ "$status_raw" == "active" ]]; then
+            status_show="${green}运行中${plain}"
+        else
+            status_show="${red}已停止${plain}"
+        fi
+        mem=$(systemctl show -p MemoryCurrent gost_$port | cut -d= -f2)
+        if ! command -v bc &> /dev/null; then
+            mem_mb="未知"
+        else
+            [[ "$mem" == "[not set]" || "$mem" == "0" ]] && mem_mb="0.00" || mem_mb=$(echo "scale=2; $mem/1024/1024" | bc)
+        fi
+        echo -e "${port}\t\t${status_show}\t\t${mem_mb}MB"
+    done
+    echo -e "------------------------------------------------"
+}
+
+uninstall_all() {
+    echo -e "${yellow}► 正在彻底卸载 gost-s5 并清理残留...${plain}"
+    services=$(ls /etc/systemd/system/gost_*.service 2>/dev/null)
+    for s in $services; do
+        name=$(basename $s)
+        systemctl stop "$name" >/dev/null 2>&1
+        systemctl disable "$name" >/dev/null 2>&1
+    done
+    pkill -9 gost >/dev/null 2>&1
+    rm -rf /etc/systemd/system/gost_*.service /etc/gost-s5 /usr/bin/gost /usr/local/bin/socks5 /usr/local/bin/sock5 /usr/local/bin/gost-s5 /usr/local/bin/gost_s5_script
+    systemctl daemon-reload
+    echo -e "${green}✔ 卸载完成！系统已恢复干净。${plain}"
+    exit 0
+}
+
 menu() {
     clear
     echo -e "${green} gost-s5 超轻量管理工具 ${yellow}${VERSION}${plain}"
     echo "-----------------------------"
     echo "1.安装/重置 SOCKS5 代理"
-    echo "2.查看/管理单个端口 (启动/停止/删除/清零)"
+    echo "2.查看/管理单个端口 (启动/停止/删除)"
     echo "3.批量操作 (全部开启/全部停止/全部重启)"
-    echo "4.查看当前运行状态 (含持久化流量统计)"
+    echo "4.查看当前运行状态"
     echo "5.查看所有代理信息"
     echo "6.卸载socks5服务"
     echo "7.退出菜单"
