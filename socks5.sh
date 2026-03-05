@@ -10,14 +10,14 @@ plain='\033[0m'
 [[ $EUID -ne 0 ]] && echo -e "${red}错误:${plain} 必须使用 root 用户运行！" && exit 1
 
 # ==============================
-# 自动安装 socks5 命令到系统
+# 自动安装 socks5 命令到系统 (核心需求)
 # ==============================
 install_self() {
-    # 将脚本安装到 /usr/local/bin/socks5 确保输入 socks5 即可调用
     echo -e "${yellow}► 正在配置系统快捷命令 [ socks5 ] ...${plain}"
+    # 无论脚本在哪里运行，都下载一份到标准路径
     curl -Ls https://raw.githubusercontent.com/xboardnext999/socks5/main/socks5.sh -o /usr/local/bin/socks5
     chmod +x /usr/local/bin/socks5
-    echo -e "${green}✔ 配置完成！以后在任何目录下输入 socks5 即可管理${plain}"
+    echo -e "${green}✔ 配置完成！以后只需输入 socks5 即可管理代理${plain}"
 }
 
 # 随机生成函数
@@ -35,6 +35,7 @@ install_gost() {
     fi
     echo -e "${yellow}► 正在下载轻量化代理引擎 (GOST)...${plain}"
     ARCH=$(uname -m)
+    # 根据架构自动选择版本
     URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-amd64-2.11.5.gz"
     [[ "$ARCH" == "aarch64" ]] && URL="https://github.com/ginuerzh/gost/releases/download/v2.11.5/gost-linux-armv8-2.11.5.gz"
     
@@ -45,7 +46,7 @@ install_gost() {
 }
 
 # ==============================
-# 配置并启动服务
+# 配置并启动服务 (针对 200MB 内存优化)
 # ==============================
 setup_service() {
     echo -e "-----------------------------"
@@ -60,7 +61,7 @@ setup_service() {
     read -p "请输入端口 [默认10000]: " S_PORT
     [[ -z "$S_PORT" ]] && S_PORT="10000"
     
-    # 写入 Systemd (适配 200MB 内存)
+    # 写入 Systemd 配置文件
     cat <<EOF > /etc/systemd/system/gost.service
 [Unit]
 Description=Gost SOCKS5 Proxy
@@ -71,6 +72,7 @@ Type=simple
 ExecStart=/usr/bin/gost -L ${S_USER}:${S_PASS}@:${S_PORT}
 Restart=always
 RestartSec=5
+# 限制内存使用，防止小内存 VPS 宕机
 MemoryLimit=60M
 
 [Install]
@@ -81,7 +83,7 @@ EOF
     systemctl enable gost >/dev/null 2>&1
     systemctl restart gost
 
-    # 核心修复：分别强制探测 IPv4 和 IPv6
+    # 重点：分别探测 IPv4 和 IPv6，解决之前只出 IPv6 的问题
     IP4=$(curl -s4m 5 ip.sb || curl -s4m 5 ifconfig.me)
     IP6=$(curl -s6m 5 ip.sb || curl -s6m 5 ifconfig.me)
 
@@ -89,10 +91,12 @@ EOF
     echo -e "${green}✔ 代理安装成功！已设置开机自启${plain}"
     echo -e "${yellow}SOCKS5 详情：${plain}"
     
+    # 如果有 IPv4 则显示 IPv4 链接
     if [[ ! -z "$IP4" ]]; then
         echo -e "IPv4 链接: ${cyan}socks5://${S_USER}:${S_PASS}@${IP4}:${S_PORT}${plain}"
     fi
 
+    # 如果有 IPv6 则显示 IPv6 链接
     if [[ ! -z "$IP6" ]]; then
         echo -e "IPv6 链接: ${cyan}socks5://${S_USER}:${S_PASS}@[${IP6}]:${S_PORT}${plain}"
     fi
@@ -102,27 +106,27 @@ EOF
 }
 
 # ==============================
-# 彻底卸载功能
+# 彻底卸载功能 (清理进程和文件)
 # ==============================
 uninstall_all() {
     echo -e "${yellow}► 正在执行彻底卸载...${plain}"
     systemctl stop gost >/dev/null 2>&1
     systemctl disable gost >/dev/null 2>&1
     
-    # 彻底杀死进程
+    # 强制杀死残留进程
     pkill -9 gost >/dev/null 2>&1
     
-    # 删除残留文件
+    # 清理所有相关文件
     rm -f /etc/systemd/system/gost.service
     rm -f /usr/bin/gost
     rm -f /usr/local/bin/socks5
     
     systemctl daemon-reload
-    echo -e "${green}✔ 卸载完成，所有进程已杀掉，文件已清理干净${plain}"
+    echo -e "${green}✔ 卸载完成！文件已删除，进程已杀掉${plain}"
 }
 
 # ==============================
-# 菜单系统
+# 菜单界面
 # ==============================
 menu() {
     clear
