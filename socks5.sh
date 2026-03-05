@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 版本信息
+VERSION="v1.0.0"
+
 # 颜色定义
 red='\033[0;31m'
 green='\033[0;32m'
@@ -31,6 +34,15 @@ install_gost() {
 
 gen_rand() { head /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w ${1:-8} | head -n 1; }
 
+# 随机端口生成 (10000-60000)
+gen_port() {
+    while :; do
+        port=$((RANDOM % 50001 + 10000))
+        # 检查端口是否被占用
+        (netstat -tuln | grep -q ":$port ") || { echo "$port"; break; }
+    done
+}
+
 get_ips() {
     IP4=$(curl -s4m 5 ip.sb || curl -s4m 5 ifconfig.me)
     IP6=$(curl -s6m 5 ip.sb || curl -s6m 5 ifconfig.me)
@@ -42,13 +54,17 @@ get_ips() {
 add_proxy() {
     install_gost
     echo -e "--- 添加新代理端口 ---"
+    
     read -p "请输入用户名 [随机]: " S_USER
     [[ -z "$S_USER" ]] && S_USER=$(gen_rand 6)
+    
     read -p "请输入密码 [随机]: " S_PASS
     [[ -z "$S_PASS" ]] && S_PASS=$(gen_rand 12)
-    read -p "请输入端口 [建议10000以上]: " S_PORT
-    [[ -z "$S_PORT" ]] && echo -e "${red}错误: 端口不能为空${plain}" && return
+    
+    read -p "请输入端口 [回车随机]: " S_PORT
+    [[ -z "$S_PORT" ]] && S_PORT=$(gen_port)
 
+    # 存储配置
     mkdir -p /etc/gost
     echo "${S_USER}:${S_PASS}" > /etc/gost/conf_${S_PORT}.txt
 
@@ -83,8 +99,8 @@ show_single_info() {
     get_ips
     echo -e "${green}代理安装成功！已设置开机自启${plain}"
     echo -e "${yellow}您的Sock5详细信息，请务必保存好！${plain}"
-    echo -e "IPV4: ${green}${IP4}${plain}"
-    echo -e "IPV6: ${green}${IP6}${plain}"
+    echo -e "IPV4: ${green}${IP4:-未探测到}${plain}"
+    echo -e "IPV6: ${green}${IP6:-未探测到}${plain}"
     echo -e "用户: ${green}${user}${plain}"
     echo -e "密码: ${green}${pass}${plain}"
     echo -e "端口: ${green}${port}${plain}"
@@ -144,35 +160,18 @@ show_status() {
     done
 }
 
-# ==============================
-# 彻底卸载服务 (关键增强)
-# ==============================
 uninstall_all() {
-    echo -e "${yellow}► 正在执行彻底卸载并清理残留...${plain}"
-    
-    # 获取并停止所有相关服务
+    echo -e "${yellow}► 正在彻底卸载并清理脚本...${plain}"
     services=$(ls /etc/systemd/system/gost_*.service 2>/dev/null)
     for s in $services; do
         name=$(basename $s)
         systemctl stop "$name" >/dev/null 2>&1
         systemctl disable "$name" >/dev/null 2>&1
     done
-
-    # 强力杀掉进程
     pkill -9 gost >/dev/null 2>&1
-    
-    # 删除所有服务文件、配置文件及二进制文件
-    rm -rf /etc/systemd/system/gost_*.service
-    rm -rf /etc/gost
-    rm -f /usr/bin/gost
-    
-    # 彻底删除脚本自身和快捷命令
-    rm -f /usr/local/bin/socks5
-    rm -f /usr/local/bin/sock5
-    rm -f /usr/local/bin/socks5_script
-    
+    rm -rf /etc/systemd/system/gost_*.service /etc/gost /usr/bin/gost /usr/local/bin/socks5 /usr/local/bin/sock5 /usr/local/bin/socks5_script
     systemctl daemon-reload
-    echo -e "${green}✔ 卸载完成！所有代理已停止，脚本已完全清除。${plain}"
+    echo -e "${green}✔ 卸载完成！脚本已自我销毁。${plain}"
     exit 0
 }
 
@@ -181,7 +180,7 @@ uninstall_all() {
 # ==============================
 menu() {
     clear
-    echo -e "${green} SOCKS5 超轻量管理工具${plain}"
+    echo -e "${green} SOCKS5 超轻量管理工具 ${yellow}${VERSION}${plain}"
     echo "-----------------------------"
     echo "1.安装/重置 SOCKS5 代理"
     echo "2.查看/管理单个端口 (启动/停止/删除)"
