@@ -39,22 +39,16 @@ get_ips() {
 # ==============================
 # 功能函数
 # ==============================
-# 1. 安装/添加代理 (调整了输入顺序)
 add_proxy() {
     install_gost
     echo -e "--- 添加新代理端口 ---"
-    
-    # 调整顺序：先用户名、密码，后端口
     read -p "请输入用户名 [随机]: " S_USER
     [[ -z "$S_USER" ]] && S_USER=$(gen_rand 6)
-    
     read -p "请输入密码 [随机]: " S_PASS
     [[ -z "$S_PASS" ]] && S_PASS=$(gen_rand 12)
-    
     read -p "请输入端口 [建议10000以上]: " S_PORT
     [[ -z "$S_PORT" ]] && echo -e "${red}错误: 端口不能为空${plain}" && return
 
-    # 存储配置信息
     mkdir -p /etc/gost
     echo "${S_USER}:${S_PASS}" > /etc/gost/conf_${S_PORT}.txt
 
@@ -82,7 +76,6 @@ EOF
     show_single_info "$S_PORT" "$S_USER" "$S_PASS"
 }
 
-# 格式化显示
 show_single_info() {
     local port=$1
     local user=$2
@@ -97,14 +90,8 @@ show_single_info() {
     echo -e "端口: ${green}${port}${plain}"
     echo -e "---"
     echo -e "${yellow}SOCKS5 详情：${plain}"
-    
-    if [[ ! -z "$IP4" ]]; then
-        echo -e "IPv4 链接: ${cyan}socks5://${user}:${pass}@${IP4}:${port}${plain}"
-    fi
-
-    if [[ ! -z "$IP6" ]]; then
-        echo -e "IPv6 链接: ${cyan}socks5://${user}:${pass}@[${IP6}]:${port}${plain}"
-    fi
+    [[ ! -z "$IP4" ]] && echo -e "IPv4 链接: ${cyan}socks5://${user}:${pass}@${IP4}:${port}${plain}"
+    [[ ! -z "$IP6" ]] && echo -e "IPv6 链接: ${cyan}socks5://${user}:${pass}@[${IP6}]:${port}${plain}"
 }
 
 show_all_info() {
@@ -128,9 +115,9 @@ manage_single() {
     echo "1. 启动 | 2. 停止 | 3. 删除"
     read -p "选择操作 [1-3]: " op
     case $op in
-        1) systemctl start gost_$port && echo "已启动" ;;
-        2) systemctl stop gost_$port && echo "已停止" ;;
-        3) systemctl stop gost_$port; systemctl disable gost_$port; rm -f /etc/systemd/system/gost_$port.service /etc/gost/conf_$port.txt; echo "已删除" ;;
+        1) systemctl start gost_$port ;;
+        2) systemctl stop gost_$port ;;
+        3) systemctl stop gost_$port; systemctl disable gost_$port; rm -f /etc/systemd/system/gost_$port.service /etc/gost/conf_$port.txt ;;
     esac
 }
 
@@ -143,7 +130,6 @@ batch_control() {
         [[ $op == 2 ]] && systemctl stop $name
         [[ $op == 3 ]] && systemctl restart $name
     done
-    echo "批量操作完成"
 }
 
 show_status() {
@@ -158,11 +144,36 @@ show_status() {
     done
 }
 
+# ==============================
+# 彻底卸载服务 (关键增强)
+# ==============================
 uninstall_all() {
-    pkill -9 gost
-    rm -rf /etc/systemd/system/gost_*.service /etc/gost /usr/bin/gost /usr/local/bin/socks5 /usr/local/bin/sock5 /usr/local/bin/socks5_script
+    echo -e "${yellow}► 正在执行彻底卸载并清理残留...${plain}"
+    
+    # 获取并停止所有相关服务
+    services=$(ls /etc/systemd/system/gost_*.service 2>/dev/null)
+    for s in $services; do
+        name=$(basename $s)
+        systemctl stop "$name" >/dev/null 2>&1
+        systemctl disable "$name" >/dev/null 2>&1
+    done
+
+    # 强力杀掉进程
+    pkill -9 gost >/dev/null 2>&1
+    
+    # 删除所有服务文件、配置文件及二进制文件
+    rm -rf /etc/systemd/system/gost_*.service
+    rm -rf /etc/gost
+    rm -f /usr/bin/gost
+    
+    # 彻底删除脚本自身和快捷命令
+    rm -f /usr/local/bin/socks5
+    rm -f /usr/local/bin/sock5
+    rm -f /usr/local/bin/socks5_script
+    
     systemctl daemon-reload
-    echo "服务已全部卸载"
+    echo -e "${green}✔ 卸载完成！所有代理已停止，脚本已完全清除。${plain}"
+    exit 0
 }
 
 # ==============================
