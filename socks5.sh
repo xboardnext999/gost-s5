@@ -4,6 +4,7 @@
 red='\033[0;31m'
 green='\033[0;32m'
 yellow='\033[0;33m'
+cyan='\033[0;36m'
 plain='\033[0m'
 
 [[ $EUID -ne 0 ]] && echo -e "${red}错误:${plain} 必须使用 root 用户运行！" && exit 1
@@ -83,17 +84,27 @@ EOF
     systemctl enable gost >/dev/null 2>&1
     systemctl restart gost
 
-    # 获取公网 IP
-    IP=$(curl -sS --connect-timeout 5 ip.sb || curl -sS --connect-timeout 5 ifconfig.me)
+    # 优化：分别探测 IPv4 和 IPv6
+    IP4=$(curl -s4m 5 ip.sb || curl -s4m 5 ifconfig.me)
+    IP6=$(curl -s6m 5 ip.sb || curl -s6m 5 ifconfig.me)
 
     echo -e "-----------------------------"
     echo -e "${green}✔ 代理安装成功！已设置开机自启${plain}"
     echo -e "${yellow}SOCKS5 详情：${plain}"
-    echo -e "地址: ${green}${IP}${plain}"
-    echo -e "端口: ${green}${S_PORT}${plain}"
-    echo -e "用户: ${green}${S_USER}${plain}"
-    echo -e "密码: ${green}${S_PASS}${plain}"
-    echo -e "链接: ${cyan}socks5://${S_USER}:${S_PASS}@${IP}:${S_PORT}${plain}"
+    
+    if [[ ! -z "$IP4" ]]; then
+        echo -e "IPv4 地址: ${green}${IP4}${plain}"
+        echo -e "IPv4 链接: ${cyan}socks5://${S_USER}:${S_PASS}@${IP4}:${S_PORT}${plain}"
+    fi
+
+    if [[ ! -z "$IP6" ]]; then
+        echo -e "IPv6 地址: ${green}[${IP6}]${plain}"
+        echo -e "IPv6 链接: ${cyan}socks5://${S_USER}:${S_PASS}@[${IP6}]:${S_PORT}${plain}"
+    fi
+
+    echo -e "端口: ${yellow}${S_PORT}${plain}"
+    echo -e "用户: ${yellow}${S_USER}${plain}"
+    echo -e "密码: ${yellow}${S_PASS}${plain}"
     echo -e "-----------------------------"
 }
 
